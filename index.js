@@ -83,9 +83,9 @@ async function run() {
             try {
                 const { email } = req.query;
 
-                
+
                 let query = {};
-                
+
                 // console.log("emailllll",req.query)
                 // Apply filters if provided
                 if (email) query.email = email;
@@ -109,53 +109,66 @@ async function run() {
 
         // Subscripton stat post api for subscription 
         // FREE PLAN SUBSCRIPTION API
-    app.post("/free", async (req, res) => {
-        try {
-            const { title, planId, period,  email, buyingDate, expireDate } = req.body;
+        app.post("/free", async (req, res) => {
+            try {
+                const { title, planId, period, email, buyingDate, expireDate } = req.body;
 
 
-            // Basic validation
-            if (!title || !planId || !period || !email || !buyingDate || !expireDate) {
-                return res.status(400).json({ message: "Missing required fields" });
-            }
+                // Basic validation
+                if (!title || !planId || !period || !email || !buyingDate || !expireDate) {
+                    return res.status(400).json({ message: "Missing required fields" });
+                }
 
-            // Check if this user already has an active free plan
-            const existing = await subscriptionCollection.findOne({
-                email,
-                planId: "0001",
-                expireDate: { $gte: new Date().toISOString() }  
-            });
-
-            if (existing) {
-                return res.status(409).json({
-                    message: "You already have an active free plan."
+                // Check if this user already has an active free plan
+                const existing = await subscriptionCollection.findOne({
+                    email,
+                    planId: "0001",
                 });
+
+                if (existing) {
+                    return res.status(409).json({
+                        message: "You already have an active free plan."
+                    });
+                }
+
+                // Insert new subscription
+                const newSubscription = {
+                    title,
+                    planId,
+                    period,
+                    amount: "N/A",
+                    email,
+                    buyingDate,
+                    expireDate,
+                    createdAt: new Date().toISOString(),
+                    status: "active",
+                    transactionID: "N/A",
+
+                };
+
+                const result = await subscriptionCollection.insertOne(newSubscription);
+
+                // -----------------------------------------
+                //  SEND TO GOOGLE SHEET 
+                // -----------------------------------------
+                await fetch("https://script.google.com/macros/s/AKfycbzrlzWNKXh78Ke3nPMwPVPlwQfwsi7zxakamZ0NplJ1hCJN-8kaih-hUYG8RRMMMEUCtA/exec", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify(newSubscription)
+                });
+
+                return res.status(200).json({
+                    message: "Free plan activated successfully",
+                    insertedId: result.insertedId
+                });
+
+            } catch (err) {
+                console.error("Subscription error:", err);
+                res.status(500).json({ message: "Internal server error" });
             }
-
-            // Insert new subscription
-            const newSubscription = {
-                title,
-                planId,
-                period,
-                email,
-                buyingDate,
-                expireDate,
-                createdAt: new Date().toISOString(),
-                status: "active"
-            };
-
-            const result = await subscriptionCollection.insertOne(newSubscription);
-
-            return res.status(200).json({
-                message: "Free plan activated successfully",
-                insertedId: result.insertedId
-            });
-
-        } catch (err) {
-            console.error("Subscription error:", err);
-            res.status(500).json({ message: "Internal server error" });
-        }
-    });
+        });
 
 
 
