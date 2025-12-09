@@ -26,6 +26,7 @@ async function run() {
         await client.connect();
         const usersCollection = client.db('elevator-server').collection('users')
         const subscriptionCollection = client.db('elevator-server').collection('subscriptions')
+        const plansCollection = client.db('elevator-server').collection('plans')
 
         // POST /users → create new user
         app.post("/users", async (req, res) => {
@@ -167,6 +168,25 @@ async function run() {
             } catch (err) {
                 console.error("Subscription error:", err);
                 res.status(500).json({ message: "Internal server error" });
+            }
+        });
+
+        // GET: Get a single plan by planId
+        app.get("/plans/:planId", async (req, res) => {
+            const planId = req.params.planId;
+
+            try {
+                const plan = await plansCollection.findOne({ planId });
+
+                if (!plan) {
+                    return res.status(404).json({ message: "Plan not found" });
+                }
+
+                res.json(plan);
+
+            } catch (error) {
+                console.error("Error fetching plan:", error);
+                res.status(500).json({ message: "Server error" });
             }
         });
 
