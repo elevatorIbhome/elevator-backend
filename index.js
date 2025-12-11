@@ -1,13 +1,47 @@
 const express = require('express')
 const { MongoClient, ServerApiVersion } = require('mongodb');
-const cors = require('cors')
+const cors = require('cors');
+var admin = require("firebase-admin");
+var serviceAccount = require("./elevator-frontend-firebase-adminsdk-fbsvc-25f5da848e.json");
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
 const app = express()
 const port = 3000
+
 
 // middle ware 
 require('dotenv').config()
 app.use(cors())
-app.use(express.json())
+
+// only parse JSON for routes that are NOT /webhook
+app.use((req, res, next) => {
+  if (req.originalUrl === "/webhook") return next();
+  express.json()(req, res, next);
+});
+
+const verifyFirebaseToken = async (req, res, next) => {
+    const idToken = req.headers.authorization?.split('Bearer ')[1];
+
+    if (!idToken) {
+        console.log("token not found");
+        return res.status(401).send({ error: 'Unauthorized: No token provided.' });
+    }
+
+    try {
+        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        
+        req.user = decodedToken; 
+        
+        next();
+    } catch (error) {
+        console.error("Error verifying Firebase token:", error);
+        return res.status(401).send({ error: 'Unauthorized: Invalid token.' });
+    }
+};
+
+const stripe = require("stripe")(process.env.STRIPE_SK)
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@elevator.nxjbawz.mongodb.net/?appName=elevator`;
 
@@ -20,7 +54,37 @@ const client = new MongoClient(uri, {
     }
 });
 
+function calculateExpireDate(period) {
+    const now = new Date();
+    const [amount, unit] = period.split(" ");
+    const num = parseInt(amount);
+
+    switch (unit.toLowerCase()) {
+    case "day":
+    case "days":
+        now.setDate(now.getDate() + num);
+        break;
+    case "week":
+    case "weeks":
+        now.setDate(now.getDate() + num * 7);
+        break;
+    case "month":
+    case "months":
+        now.setMonth(now.getMonth() + num);
+        break;
+    case "year":
+    case "years":
+        now.setFullYear(now.getFullYear() + num);
+        break;
+    default:
+        throw new Error("Invalid period format");
+    }
+
+    return now.toISOString();
+}
+
 async function run() {
+
     try {
         // Connect the client to the server	(optional starting in v4.7)
         await client.connect();
@@ -190,8 +254,102 @@ async function run() {
             }
         });
 
+        // get patment intent 
+        app.post("/api/create-payment-intent", verifyFirebaseToken, async (req, res) => {
+            const { planId } = req.body
 
+            const userEmail = req.user.email;
 
+            const plan = await plansCollection.findOne({ planId });
+            if (!plan) {
+                return res.status(400).send({
+                    success: false,
+                    error: "invalid plan"
+                });
+            }
+
+            const planPriceORE = Math.round(parseFloat(plan.price) * 100); 
+
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: planPriceORE,
+                currency: "dkk",
+                metadata: { userEmail, planId },
+            });
+
+            res.send({
+                clientSecret: paymentIntent.client_secret,
+            });
+        });
+
+        // webhook for strpe to get payment info
+        app.post('/webhook', express.raw({type: 'application/json'}), async(req, res) => {
+            let event = req.body;
+            
+            const endpointSecret = process.env.STRIPE_WEBHOOK_KEY;
+
+            if (endpointSecret) {
+                const signature = req.headers['stripe-signature'];
+                try {
+                event = stripe.webhooks.constructEvent(
+                    req.body,
+                    signature,
+                    endpointSecret
+                );
+                } catch (err) {
+                console.log(`Webhook signature verification failed.`, err.message);
+                return res.sendStatus(400);
+                }
+            }
+
+            if (event.type === 'payment_intent.succeeded') {
+                const paymentIntent = event.data.object;
+
+                const transactionID = paymentIntent.id;
+                const existingSubscription = await subscriptionCollection.findOne({ transactionID: transactionID });
+
+                if (existingSubscription) {
+                    console.log(`[Idempotency Check] Payment Intent ${transactionID} already processed. Skipping fulfillment.`);
+                    
+                    return res.status(200).send({ received: true }); 
+                }
+
+                const planId = paymentIntent.metadata.planId;
+
+                const plan = await plansCollection.findOne({ planId });
+
+                const {title, period} = plan
+                
+                const newSubscription = {
+                    title,
+                    planId,
+                    period,
+                    amount: paymentIntent.amount,
+                    email: paymentIntent.metadata.userEmail,
+                    buyingDate: new Date().toISOString(),
+                    expireDate: calculateExpireDate(period),
+                    createdAt: new Date().toISOString(),
+                    status: "active",
+                    transactionID
+                };
+
+                const result = await subscriptionCollection.insertOne(newSubscription);
+
+                // Send to Google Apps Script
+                fetch("https://script.google.com/macros/s/AKfycbzrlzWNKXh78Ke3nPMwPVPlwQfwsi7zxakamZ0NplJ1hCJN-8kaih-hUYG8RRMMMEUCtA/exec", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(newSubscription)
+                })
+                .then(res => console.log("Saved to Google Sheet"))
+                .catch(err => console.error("Error saving to Google Sheet:", err));
+
+            }else{
+                console.log(`Unhandled event type ${event.type}.`);
+            }
+            
+            res.send();
+
+        });
 
         // Send a ping to confirm a successful connection
         await client.db("admin").command({ ping: 1 });
