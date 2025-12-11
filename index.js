@@ -15,12 +15,10 @@ const port = 3000
 
 // middle ware 
 
-const allowedOrigin =
-  process.env.NODE_ENV === "production"
-    ? ["https://elevator-frontend.vercel.app"]
-    : ["http://localhost:5173"];
-
-app.use(cors({ origin: allowedOrigin }));
+app.use(cors({
+  origin: ["https://elevator-frontend.vercel.app"],
+  credentials: true
+}));
 
 // only parse JSON for routes that are NOT /webhook
 app.use((req, res, next) => {
