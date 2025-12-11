@@ -13,49 +13,15 @@ const app = express()
 const port = 3000
 
 
-const allowedOrigins = [
-  "https://elevator-frontend.vercel.app"
-];
+const corsOptions = {
+  origin: ["https://elevator-frontend.vercel.app"],
+  methods: 'GET,POST,OPTIONS',
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true, 
+};
 
-// handle CORS for all requests, including preflight
-app.options("/*", (req, res) => {
-  const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,DELETE,OPTIONS"
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type,Authorization"
-    );
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    return res.sendStatus(200);
-  } else {
-    return res.status(403).send("CORS blocked by server");
-  }
-});
+app.use(cors(corsOptions));
 
-// actual middleware for normal requests
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,DELETE,OPTIONS"
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type,Authorization"
-    );
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    return next();
-  } else {
-    return res.status(403).send("CORS blocked by server");
-  }
-});
 
 // only parse JSON for routes that are NOT /webhook
 app.use((req, res, next) => {
