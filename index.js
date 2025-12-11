@@ -13,15 +13,6 @@ const app = express()
 const port = 3000
 
 
-const corsOptions = {
-  origin: ["https://elevator-frontend.vercel.app"],
-  methods: 'GET,POST,OPTIONS',
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true, 
-};
-
-app.use(cors(corsOptions));
-
 
 // only parse JSON for routes that are NOT /webhook
 app.use((req, res, next) => {
