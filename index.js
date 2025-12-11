@@ -272,7 +272,7 @@ async function run() {
         });
 
         // get patment intent 
-        app.post("/api/create-payment-intent", verifyFirebaseToken, async (req, res) => {
+        app.post("/create-payment-intent", verifyFirebaseToken, async (req, res) => {
             const { planId } = req.body
 
             const userEmail = req.user.email;
