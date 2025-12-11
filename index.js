@@ -12,7 +12,25 @@ admin.initializeApp({
 const app = express()
 const port = 3000
 
+const allowedOrigins = [
+    'https://elevator-frontend.vercel.app'
+];
 
+const corsOptions = {
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'), false);
+        }
+    },
+    methods: 'GET,POST,OPTIONS',
+    allowedHeaders: ['Content-Type', 'Authorization'], 
+    credentials: true
+};
+
+// Apply the CORS middleware
+app.use(cors(corsOptions));
 
 // only parse JSON for routes that are NOT /webhook
 app.use((req, res, next) => {
