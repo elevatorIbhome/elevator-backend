@@ -13,7 +13,12 @@ const port = 3000
 
 // middle ware 
 require('dotenv').config()
-app.use(cors())
+const allowedOrigin =
+  process.env.NODE_ENV === "production"
+    ? "https://elevator-backend.vercel.app/"
+    : "http://localhost:5173";
+
+app.use(cors({ origin: allowedOrigin }));
 
 // only parse JSON for routes that are NOT /webhook
 app.use((req, res, next) => {
