@@ -17,7 +17,7 @@ const port = 3000
 
 const allowedOrigin =
   process.env.NODE_ENV === "production"
-    ? ["https://elevator-backend.vercel.app/"]
+    ? ["https://elevator-frontend.vercel.app"]
     : ["http://localhost:5173"];
 
 app.use(cors({ origin: allowedOrigin }));
