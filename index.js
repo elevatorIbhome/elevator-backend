@@ -2,6 +2,8 @@ const express = require('express')
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const cors = require('cors');
 var admin = require("firebase-admin");
+require('dotenv').config()
+
 const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_CREDENTIALS);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -12,11 +14,11 @@ const port = 3000
 
 
 // middle ware 
-require('dotenv').config()
+
 const allowedOrigin =
   process.env.NODE_ENV === "production"
-    ? "https://elevator-backend.vercel.app/"
-    : "http://localhost:5173";
+    ? ["https://elevator-backend.vercel.app/"]
+    : ["http://localhost:5173"];
 
 app.use(cors({ origin: allowedOrigin }));
 
