@@ -2,7 +2,7 @@ const express = require('express')
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const cors = require('cors');
 var admin = require("firebase-admin");
-var serviceAccount = require("./elevator-frontend-firebase-adminsdk-fbsvc-25f5da848e.json");
+const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_CREDENTIALS);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
