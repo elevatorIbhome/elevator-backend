@@ -12,25 +12,30 @@ admin.initializeApp({
 const app = express()
 const port = 3000
 
-const allowed_origins = [
-    // 'http://localhost:5173',
-    'https://elevator-frontend.vercel.app',
-];
+const allowed_origins =
+  process.env.NODE_ENV !== "production"
+    ? ["http://localhost:5173"]
+    : ["https://elevator-frontend.vercel.app"];
 
 const corsOptions = {
-    origin: (origin, callback) => {
-        if (!origin || allowed_origins.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error(`Origin ${origin} not allowed by CORS`), false);
-        }
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true,
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+
+    if (allowed_origins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn("Blocked by CORS:", origin);
+      callback(null, false);
+    }
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
 };
 
 app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
+
 
 // only parse JSON for routes that are NOT /webhook
 app.use((req, res, next) => {
@@ -76,6 +81,27 @@ const client = new MongoClient(uri, {
     }
 });
 
+let usersCollection;
+let subscriptionCollection;
+let plansCollection;
+
+let isConnected = false;
+
+async function connectDB() {
+    if (isConnected) return;
+
+    await client.connect();
+    isConnected = true;
+
+    const db = client.db("elevator-server");
+    usersCollection = db.collection("users");
+    subscriptionCollection = db.collection("subscriptions");
+    plansCollection = db.collection("plans");
+
+    console.log("MongoDB connected");
+}
+connectDB();
+
 function calculateExpireDate(period) {
     const now = new Date();
     const [amount, unit] = period.split(" ");
@@ -105,299 +131,331 @@ function calculateExpireDate(period) {
     return now.toISOString();
 }
 
-async function run() {
-
-    try {
-        // Connect the client to the server	(optional starting in v4.7)
-        await client.connect();
-        const usersCollection = client.db('elevator-server').collection('users')
-        const subscriptionCollection = client.db('elevator-server').collection('subscriptions')
-        const plansCollection = client.db('elevator-server').collection('plans')
-
-        // POST /users → create new user
-        app.post("/users", async (req, res) => {
-            try {
-                const {
-                    userId,
-                    name,
-                    email,
-                    role,
-                    isSubscribed,
-                    createdAt,
-                    updatedAt,
-                } = req.body;
-
-                console.log(req.body)
-
-                //  Required fields
-                if (!userId || !name || !email) {
-                    return res.status(400).json({ message: "Missing required fields: userId, name, email" });
-                }
-
-                // Check if user exists
-                const existingUser = await usersCollection.findOne({ userId });
-                if (existingUser) {
-                    return res.status(200).json({ message: "User already exists", user: existingUser });
-                }
-
-                // Create new user object with defaults
-                const newUser = {
-                    userId,
-                    name,
-                    email,
-                    role,
-                    isSubscribed,
-                    createdAt,
-                    updatedAt,
-                };
-
-                //  Insert into MongoDB
-                const result = await usersCollection.insertOne(newUser);
-                res.status(201).json({
-                    message: "User created successfully",
-                    user: newUser,
-                    insertedId: result.insertedId,
-                });
-            } catch (error) {
-                console.error("Error creating user:", error);
-                res.status(500).json({ message: "Internal server error" });
-            }
-        });
-
-
-        // GET all users or filter by query
-        app.get("/users", async (req, res) => {
-            try {
-                const { email } = req.query;
-
-
-                let query = {};
-
-                // console.log("emailllll",req.query)
-                // Apply filters if provided
-                if (email) query.email = email;
-
-                const users = await usersCollection.find(query).toArray();
-
-                if (users.length === 0) {
-                    return res.status(404).json({ message: "No users found" });
-                }
-
-                res.status(200).json({
-                    message: "Users retrieved successfully",
-                    count: users.length,
-                    users,
-                });
-            } catch (error) {
-                console.error("Error fetching users:", error);
-                res.status(500).json({ message: "Internal server error" });
-            }
-        });
-
-        // Subscripton stat post api for subscription 
-        // FREE PLAN SUBSCRIPTION API
-        app.post("/free", async (req, res) => {
-            try {
-                const { title, planId, period, email, buyingDate, expireDate } = req.body;
-
-
-                // Basic validation
-                if (!title || !planId || !period || !email || !buyingDate || !expireDate) {
-                    return res.status(400).json({ message: "Missing required fields" });
-                }
-
-                // Check if this user already has an active free plan
-                const existing = await subscriptionCollection.findOne({
-                    email,
-                    planId: "0001",
-                });
-
-                if (existing) {
-                    return res.status(409).json({
-                        message: "You already have an active free plan."
-                    });
-                }
-
-                // Insert new subscription
-                const newSubscription = {
-                    title,
-                    planId,
-                    period,
-                    amount: "N/A",
-                    email,
-                    buyingDate,
-                    expireDate,
-                    createdAt: new Date().toISOString(),
-                    status: "active",
-                    transactionID: "N/A",
-
-                };
-
-                const result = await subscriptionCollection.insertOne(newSubscription);
-
-                // -----------------------------------------
-                //  SEND TO GOOGLE SHEET 
-                // -----------------------------------------
-                await fetch("https://script.google.com/macros/s/AKfycbzrlzWNKXh78Ke3nPMwPVPlwQfwsi7zxakamZ0NplJ1hCJN-8kaih-hUYG8RRMMMEUCtA/exec", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify(newSubscription)
-                });
-
-                return res.status(200).json({
-                    message: "Free plan activated successfully",
-                    insertedId: result.insertedId
-                });
-
-            } catch (err) {
-                console.error("Subscription error:", err);
-                res.status(500).json({ message: "Internal server error" });
-            }
-        });
-
-        // GET: Get a single plan by planId
-        app.get("/plans/:planId", async (req, res) => {
-            try {
-                const planId = req.params.planId;
-                const plan = await plansCollection.findOne({ planId });
-
-                if (!plan) {
-                    return res.status(404).json({ message: "Plan not found" });
-                }
-
-                res.json(plan);
-
-            } catch (error) {
-                console.error("Error fetching plan:", error);
-                res.status(500).json({ message: "Server error" });
-            }
-        });
-
-        // get patment intent 
-        app.post("/create-payment-intent", verifyFirebaseToken, async (req, res) => {
-            try {
-                const { planId } = req.body
-
-                const userEmail = req.user.email;
-
-                const plan = await plansCollection.findOne({ planId });
-                if (!plan) {
-                    return res.status(400).send({
-                        success: false,
-                        error: "invalid plan"
-                    });
-                }
-
-                const planPriceORE = Math.round(parseFloat(plan.price) * 100); 
-
-                const paymentIntent = await stripe.paymentIntents.create({
-                    amount: planPriceORE,
-                    currency: "dkk",
-                    metadata: { userEmail, planId },
-                });
-
-                res.send({
-                    clientSecret: paymentIntent.client_secret,
-                });
-            } catch (error) {
-                console.error("Error fetching users:", error);
-                res.status(500).json({ message: "Internal server error" });
-            }
-        });
-
-        // webhook for strpe to get payment info
-        app.post('/webhook', express.raw({type: 'application/json'}), async(req, res) => {
-            try {
-                let event = req.body;
-                
-                const endpointSecret = process.env.STRIPE_WEBHOOK_KEY;
-
-                if (endpointSecret) {
-                    const signature = req.headers['stripe-signature'];
-                    try {
-                    event = stripe.webhooks.constructEvent(
-                        req.body,
-                        signature,
-                        endpointSecret
-                    );
-                    } catch (err) {
-                    console.log(`Webhook signature verification failed.`, err.message);
-                    return res.sendStatus(400);
-                    }
-                }
-
-                if (event.type === 'payment_intent.succeeded') {
-                    const paymentIntent = event.data.object;
-
-                    const transactionID = paymentIntent.id;
-                    const existingSubscription = await subscriptionCollection.findOne({ transactionID: transactionID });
-
-                    if (existingSubscription) {
-                        console.log(`[Idempotency Check] Payment Intent ${transactionID} already processed. Skipping fulfillment.`);
-                        
-                        return res.status(200).send({ received: true }); 
-                    }
-
-                    const planId = paymentIntent.metadata.planId;
-
-                    const plan = await plansCollection.findOne({ planId });
-
-                    const {title, period} = plan
-                    
-                    const newSubscription = {
-                        title,
-                        planId,
-                        period,
-                        amount: paymentIntent.amount,
-                        email: paymentIntent.metadata.userEmail,
-                        buyingDate: new Date().toISOString(),
-                        expireDate: calculateExpireDate(period),
-                        createdAt: new Date().toISOString(),
-                        status: "active",
-                        transactionID
-                    };
-
-                    const result = await subscriptionCollection.insertOne(newSubscription);
-
-                    // Send to Google Apps Script
-                    fetch("https://script.google.com/macros/s/AKfycbzrlzWNKXh78Ke3nPMwPVPlwQfwsi7zxakamZ0NplJ1hCJN-8kaih-hUYG8RRMMMEUCtA/exec", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(newSubscription)
-                    })
-                    .then(res => console.log("Saved to Google Sheet"))
-                    .catch(err => console.error("Error saving to Google Sheet:", err));
-
-                }else{
-                    console.log(`Unhandled event type ${event.type}.`);
-                }
-                
-                res.send();
-            } catch (error) {
-                console.error("Error fetching users:", error);
-                res.status(500).json({ message: "Internal server error" });
-            }
-
-        });
-
-        // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
-    } finally {
-        // Ensures that the client will close when you finish/error
-        // await client.close();
-    }
-}
-run().catch(console.dir);
-
-
-
 app.get('/', (req, res) => {
     res.send('Elevator is working')
 })
+// POST /users → create new user
+app.post("/users", async (req, res) => {
+    try {
+        await connectDB()
+        const {
+            userId,
+            name,
+            email,
+            role,
+            isSubscribed,
+            createdAt,
+            updatedAt,
+        } = req.body;
 
-app.listen(port, () => {
-    console.log(`Example app listening on port ${port}`)
-})
+        console.log(req.body)
+
+        //  Required fields
+        if (!userId || !name || !email) {
+            return res.status(400).json({ message: "Missing required fields: userId, name, email" });
+        }
+
+        // Check if user exists
+        const existingUser = await usersCollection.findOne({ userId });
+        if (existingUser) {
+            return res.status(200).json({ message: "User already exists", user: existingUser });
+        }
+
+        // Create new user object with defaults
+        const newUser = {
+            userId,
+            name,
+            email,
+            role,
+            isSubscribed,
+            createdAt,
+            updatedAt,
+        };
+
+        const userSheet = {
+            name,
+            email,
+            plan: "N/A"
+        }
+
+        //  Insert into MongoDB
+        const result = await usersCollection.insertOne(newUser);
+
+        fetch("https://script.google.com/macros/s/AKfycbxBYSvhhWM8gIim3IK6x6jT4bDtDWdCNEULs-xUYf5D7QlhEaW0Bl6vM-o4yXPS2LkivQ/exec", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                sheetName: "users",
+                ...userSheet
+            })
+        })
+        .then(res => console.log("Saved to Google Sheet"))
+        .catch(err => console.error("Error saving to Google Sheet:", err));
+
+        res.status(201).json({
+            message: "User created successfully",
+            user: newUser,
+            insertedId: result.insertedId,
+        });
+    } catch (error) {
+        console.error("Error creating user:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+// GET all users or filter by query
+app.get("/users", async (req, res) => {
+    try {
+        await connectDB()
+        const { email } = req.query;
+
+
+        let query = {};
+
+        // console.log("emailllll",req.query)
+        // Apply filters if provided
+        if (email) query.email = email;
+
+        const users = await usersCollection.find(query).toArray();
+
+        if (users.length === 0) {
+            return res.status(404).json({ message: "No users found" });
+        }
+
+        res.status(200).json({
+            message: "Users retrieved successfully",
+            count: users.length,
+            users,
+        });
+    } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+// Subscripton stat post api for subscription 
+// FREE PLAN SUBSCRIPTION API
+app.post("/free", async (req, res) => {
+    try {
+        await connectDB()
+        const { title, planId, period, email, buyingDate, expireDate } = req.body;
+
+
+        // Basic validation
+        if (!title || !planId || !period || !email || !buyingDate || !expireDate) {
+            return res.status(400).json({ message: "Missing required fields" });
+        }
+
+        // Check if this user already has an active free plan
+        const existing = await subscriptionCollection.findOne({
+            email,
+            planId: "0001",
+        });
+
+        if (existing) {
+            return res.status(409).json({
+                message: "You already have an active free plan."
+            });
+        }
+
+        // Insert new subscription
+        const newSubscription = {
+            title,
+            planId,
+            period,
+            amount: "N/A",
+            email,
+            buyingDate,
+            expireDate,
+            createdAt: new Date().toISOString(),
+            status: "active",
+            transactionID: "N/A",
+
+        };
+
+        const result = await subscriptionCollection.insertOne(newSubscription);
+
+        // -----------------------------------------
+        //  SEND TO GOOGLE SHEET 
+        // -----------------------------------------
+        const user = await usersCollection.findOne({ email });
+        
+        fetch("https://script.google.com/macros/s/AKfycbzUtdD8gaC2QWiry3TZLN78eHg-qpdOTRk0sfwwXh7Xei7U8X3NUk18k6Y_9155q4mcpg/exec", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    sheetName: "users",
+                    name: user.name,
+                    email: email,
+                    plan: "Intro"
+                })
+        })
+        .then(res => console.log("Saved to Google Sheet"))
+        .catch(err => console.error("Error saving to Google Sheet:", err));
+
+        return res.status(200).json({
+            message: "Free plan activated successfully",
+            insertedId: result.insertedId
+        });
+
+    } catch (err) {
+        console.error("Subscription error:", err);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+// GET: Get a single plan by planId
+app.get("/plans/:planId", async (req, res) => {
+    try {
+        await connectDB()
+        const planId = req.params.planId;
+        const plan = await plansCollection.findOne({ planId });
+
+        if (!plan) {
+            return res.status(404).json({ message: "Plan not found" });
+        }
+
+        res.json(plan);
+
+    } catch (error) {
+        console.error("Error fetching plan:", error);
+        res.status(500).json({ message: "Server error" });
+    }
+});
+
+// get patment intent 
+app.post("/create-payment-intent", verifyFirebaseToken, async (req, res) => {
+    try {
+        await connectDB()
+        const { planId } = req.body
+
+        const userEmail = req.user.email;
+
+        const plan = await plansCollection.findOne({ planId });
+        if (!plan) {
+            return res.status(400).send({
+                success: false,
+                error: "invalid plan"
+            });
+        }
+
+        const planPriceORE = Math.round(parseFloat(plan.price) * 100); 
+
+        const paymentIntent = await stripe.paymentIntents.create({
+            amount: planPriceORE,
+            currency: "dkk",
+            metadata: { userEmail, planId },
+        });
+
+        res.send({
+            clientSecret: paymentIntent.client_secret,
+        });
+    } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+});
+
+// webhook for strpe to get payment info
+app.post('/webhook', express.raw({type: 'application/json'}), async(req, res) => {
+    try {
+        await connectDB()
+        let event = req.body;
+        
+        const endpointSecret = process.env.STRIPE_WEBHOOK_KEY;
+
+        if (endpointSecret) {
+            const signature = req.headers['stripe-signature'];
+            try {
+            event = stripe.webhooks.constructEvent(
+                req.body,
+                signature,
+                endpointSecret
+            );
+            } catch (err) {
+            console.log(`Webhook signature verification failed.`, err.message);
+            return res.sendStatus(400);
+            }
+        }
+
+        if (event.type === 'payment_intent.succeeded') {
+            const paymentIntent = event.data.object;
+
+            const transactionID = paymentIntent.id;
+            const email = paymentIntent.metadata.userEmail
+            const existingSubscription = await subscriptionCollection.findOne({ transactionID: transactionID });
+
+            if (existingSubscription) {
+                console.log(`[Idempotency Check] Payment Intent ${transactionID} already processed. Skipping fulfillment.`);
+                
+                return res.status(200).send({ received: true }); 
+            }
+
+            const planId = paymentIntent.metadata.planId;
+
+            const plan = await plansCollection.findOne({ planId });
+            const user = await usersCollection.findOne({ email });
+
+            const {title, period} = plan
+            
+            const newSubscription = {
+                title,
+                planId,
+                period,
+                amount: paymentIntent.amount,
+                email,
+                buyingDate: new Date().toISOString(),
+                expireDate: calculateExpireDate(period),
+                createdAt: new Date().toISOString(),
+                status: "active",
+                transactionID
+            };
+
+            const result = await subscriptionCollection.insertOne(newSubscription);
+            // Send to Google Apps Script
+            fetch("https://script.google.com/macros/s/AKfycbzUtdD8gaC2QWiry3TZLN78eHg-qpdOTRk0sfwwXh7Xei7U8X3NUk18k6Y_9155q4mcpg/exec", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    sheetName: title,
+                    ...newSubscription
+                })
+            })
+            .then(res => console.log("Saved to Google Sheet"))
+            .catch(err => console.error("Error saving to Google Sheet:", err));
+
+            // Send to Google Apps Script
+            console.log("updating plan");
+            fetch("https://script.google.com/macros/s/AKfycbzUtdD8gaC2QWiry3TZLN78eHg-qpdOTRk0sfwwXh7Xei7U8X3NUk18k6Y_9155q4mcpg/exec", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    sheetName: "users",
+                    name: user.name,
+                    email: email,
+                    plan: title
+                })
+            })
+            .then(res => console.log("Saved to Google Sheet"))
+            .catch(err => console.error("Error saving to Google Sheet:", err));
+
+        }else{
+            console.log(`Unhandled event type ${event.type}.`);
+        }
+        
+        res.send();
+    } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).json({ message: "Internal server error" });
+    }
+
+});
+
+        
+if (process.env.NODE_ENV !== "production") {
+  app.listen(port, () => {
+    console.log(`Server listening on port ${port}`);
+  });
+}
+
+module.exports = app;
