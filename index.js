@@ -181,7 +181,7 @@ app.post("/users", async (req, res) => {
         //  Insert into MongoDB
         const result = await usersCollection.insertOne(newUser);
 
-        fetch("https://script.google.com/macros/s/AKfycbxBYSvhhWM8gIim3IK6x6jT4bDtDWdCNEULs-xUYf5D7QlhEaW0Bl6vM-o4yXPS2LkivQ/exec", {
+        fetch("https://script.google.com/macros/s/AKfycbzUtdD8gaC2QWiry3TZLN78eHg-qpdOTRk0sfwwXh7Xei7U8X3NUk18k6Y_9155q4mcpg/exec", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -402,7 +402,7 @@ app.post('/webhook', express.raw({type: 'application/json'}), async(req, res) =>
                 title,
                 planId,
                 period,
-                amount: paymentIntent.amount,
+                amount: `${parseInt(paymentIntent.amount) / 100} kr`,
                 email,
                 buyingDate: new Date().toISOString(),
                 expireDate: calculateExpireDate(period),
